@@ -1,7 +1,12 @@
-// Flutter MVP "Gestione Squadre Sportive" — con fix su TabBar, Locale e Album
+// Flutter MVP "Gestione Squadre Sportive" — v2
+// Fix: TabBar controller, Locale, Album create, + CRUD base (Atlete, Gare, Album)
+// + Image picker (gallery/camera) for document images & album.
+
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:intl/date_symbol_data_local.dart';
+import 'package:image_picker/image_picker.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -143,16 +148,21 @@ class Album {
 // ===================== STORE IN-MEMORY =====================
 class AppStore extends ChangeNotifier {
   final List<Team> teams = [];
-  void addTeam(String name) {
-    teams.add(Team(id: UniqueKey().toString(), name: name));
-    notifyListeners();
-  }
+  void addTeam(String name) { teams.add(Team(id: UniqueKey().toString(), name: name)); notifyListeners(); }
   void renameTeam(Team team, String name) { team.name = name; notifyListeners(); }
   void removeTeam(Team team) { teams.remove(team); notifyListeners(); }
+
   void addAthlete(Team team, Athlete a) { team.athletes.add(a); notifyListeners(); }
+  void removeAthlete(Team team, Athlete a) { team.athletes.remove(a); notifyListeners(); }
   void updateAthlete(Team team) { notifyListeners(); }
+
   void addGame(Team team, MatchGame g) { team.games.add(g); notifyListeners(); }
+  void removeGame(Team team, MatchGame g) { team.games.remove(g); notifyListeners(); }
+  void updateGame(Team team) { notifyListeners(); }
+
   void addAlbum(Team team, Album a) { team.albums.add(a); notifyListeners(); }
+  void removeAlbum(Team team, Album a) { team.albums.remove(a); notifyListeners(); }
+  void renameAlbum(Album a, String name) { a.name = name; notifyListeners(); }
 }
 
 // ===================== HOME =====================
@@ -391,9 +401,12 @@ class _DatiTab extends StatelessWidget {
                     title: Text('${a.firstName} ${a.lastName}'),
                     subtitle: Row(children: _statusLabels(a.status)),
                     trailing: const Icon(Icons.chevron_right),
-                    onTap: () => Navigator.of(context).push(MaterialPageRoute(
-                      builder: (_) => AthleteDetailPage(athlete: a, onChanged: () => store.updateAthlete(team)),
-                    )),
+                    onTap: () async {
+                      final deleted = await Navigator.of(context).push<bool>(MaterialPageRoute(
+                        builder: (_) => AthleteDetailPage(athlete: a, onChanged: () => store.updateAthlete(team)),
+                      ));
+                      if (deleted == true) store.removeAthlete(team, a);
+                    },
                   ),
                 );
               },
@@ -433,6 +446,8 @@ class AthleteDetailPage extends StatefulWidget {
 class _AthleteDetailPageState extends State<AthleteDetailPage> {
   late Athlete a;
   final df = DateFormat('dd/MM/yyyy');
+  final ImagePicker _picker = ImagePicker();
+
   @override
   void initState() {
     super.initState();
@@ -445,7 +460,10 @@ class _AthleteDetailPageState extends State<AthleteDetailPage> {
       appBar: AppBar(
         leading: IconButton(icon: const Icon(Icons.arrow_back), onPressed: () => Navigator.pop(context)),
         title: Text('${a.firstName} ${a.lastName}'),
-        actions: [IconButton(icon: const Icon(Icons.edit), onPressed: _editBasic)],
+        actions: [
+          IconButton(icon: const Icon(Icons.delete), tooltip: 'Elimina atleta', onPressed: _confirmDelete),
+          IconButton(icon: const Icon(Icons.edit), onPressed: _editBasic),
+        ],
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(12),
@@ -455,37 +473,47 @@ class _AthleteDetailPageState extends State<AthleteDetailPage> {
           const Divider(),
           _infoRow('Cellulare', a.phone ?? '-'),
           Row(children: [
-            ElevatedButton.icon(
-              onPressed: a.phone == null ? null : _callNumber,
-              icon: const Icon(Icons.phone),
-              label: const Text('Chiama'),
-            ),
+            ElevatedButton.icon(onPressed: a.phone == null ? null : _callNumber, icon: const Icon(Icons.phone), label: const Text('Chiama')),
+            const SizedBox(width: 8),
+            OutlinedButton(onPressed: () async {
+              final t = await _textDialog('Cellulare', a.phone);
+              if (t != null) setState(() => a.phone = t);
+            }, child: const Text('Imposta')),
           ]),
           const Divider(),
-          _infoRow('Taglia Maglia/Calzone', '${a.shirtSize ?? '-'} / ${a.shortSize ?? '-'}'),
           _infoRow('Ruolo', a.role ?? '-'),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: OutlinedButton(onPressed: () async {
+              final t = await _textDialog('Ruolo', a.role);
+              if (t != null) setState(() => a.role = t);
+            }, child: const Text('Imposta')),
+          ),
           const Divider(),
           _infoRow('Scadenza Autocertificazione', a.selfCertExpiry == null ? '-' : df.format(a.selfCertExpiry!)),
           _dateButton('Imposta', (d) => setState(() => a.selfCertExpiry = d)),
           const Divider(),
-          _docRow('Carta d\'identità', a.idCardNumber, onNumber: (v) => a.idCardNumber = v),
-          _docRow('Codice Fiscale', a.taxCode, onNumber: (v) => a.taxCode = v),
+          _docNumberWithActions(
+            label: "Carta d'identità",
+            number: a.idCardNumber,
+            onNumber: (v) => a.idCardNumber = v,
+            imagePath: a.idCardImagePath,
+            onPick: (p) => setState(() => a.idCardImagePath = p),
+          ),
+          const SizedBox(height: 12),
+          _docNumberWithActions(
+            label: 'Codice Fiscale',
+            number: a.taxCode,
+            onNumber: (v) => a.taxCode = v,
+            imagePath: a.taxCodeImagePath,
+            onPick: (p) => setState(() => a.taxCodeImagePath = p),
+          ),
           const Divider(),
           _infoRow('Numero Maglia', a.jerseyNumber?.toString() ?? '-'),
-          ElevatedButton(
-              onPressed: () async {
-                final v = await _numberDialog('Numero maglia');
-                if (v != null) setState(() => a.jerseyNumber = v);
-              },
-              child: const Text('Imposta')),
+          ElevatedButton(onPressed: () async { final v = await _numberDialog('Numero maglia'); if (v != null) setState(() => a.jerseyNumber = v); }, child: const Text('Imposta')),
           const Divider(),
           _infoRow('Matricola', a.matricola ?? '-'),
-          ElevatedButton(
-              onPressed: () async {
-                final t = await _textDialog('Matricola', a.matricola);
-                if (t != null) setState(() => a.matricola = t);
-              },
-              child: const Text('Imposta')),
+          ElevatedButton(onPressed: () async { final t = await _textDialog('Matricola', a.matricola); if (t != null) setState(() => a.matricola = t); }, child: const Text('Imposta')),
           const Divider(),
           _infoRow('Data di nascita', a.birthDate == null ? '-' : df.format(a.birthDate!)),
           _dateButton('Imposta', (d) => setState(() => a.birthDate = d)),
@@ -498,7 +526,7 @@ class _AthleteDetailPageState extends State<AthleteDetailPage> {
         child: Padding(
           padding: const EdgeInsets.all(12.0),
           child: ElevatedButton(
-            onPressed: () { widget.onChanged(); Navigator.pop(context); },
+            onPressed: () { widget.onChanged(); Navigator.pop(context, false); },
             child: const Text('Salva'),
           ),
         ),
@@ -532,8 +560,7 @@ class _AthleteDetailPageState extends State<AthleteDetailPage> {
         ],
       ),
     );
-    if (t == null || t.isEmpty) return null;
-    return int.tryParse(t);
+    if (t == null || t.isEmpty) return null; return int.tryParse(t);
   }
 
   Future<String?> _textDialog(String title, String? initial) async {
@@ -551,26 +578,72 @@ class _AthleteDetailPageState extends State<AthleteDetailPage> {
     );
   }
 
-  void _editBasic() async {
-    final first = await _textDialog('Nome', a.firstName);
-    if (first != null) setState(() => a.firstName = first);
-    final last = await _textDialog('Cognome', a.lastName);
-    if (last != null) setState(() => a.lastName = last);
-  }
-
   void _callNumber() {
-    ScaffoldMessenger.of(context)
-        .showSnackBar(const SnackBar(content: Text('Chiamata diretta: integrare url_launcher')));
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Chiamata diretta: integrare url_launcher')));
   }
-}
 
-Widget _docRow(String label, String? number, {required ValueChanged<String> onNumber}) {
-  final controller = TextEditingController(text: number ?? '');
-  return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-    Text(label, style: const TextStyle(fontWeight: FontWeight.w600)),
-    const SizedBox(height: 6),
-    TextField(controller: controller, decoration: const InputDecoration(hintText: 'Numero documento'), onChanged: onNumber),
-  ]);
+  void _confirmDelete() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Elimina atleta'),
+        content: const Text('Sei sicuro di voler eliminare questa atleta?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Annulla')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Elimina')),
+        ],
+      ),
+    );
+    if (ok == true) Navigator.pop(context, true);
+  }
+
+  Widget _docNumberWithActions({
+    required String label,
+    required String? number,
+    required ValueChanged<String> onNumber,
+    required String? imagePath,
+    required ValueChanged<String?> onPick,
+  }) {
+    final controller = TextEditingController(text: number ?? '');
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(label, style: const TextStyle(fontWeight: FontWeight.w600)),
+      const SizedBox(height: 6),
+      TextField(controller: controller, decoration: const InputDecoration(hintText: 'Numero documento'), onChanged: onNumber),
+      const SizedBox(height: 6),
+      Wrap(spacing: 8, children: [
+        OutlinedButton.icon(
+          onPressed: imagePath == null ? null : () => _viewImage(imagePath!),
+          icon: const Icon(Icons.image),
+          label: const Text('Visualizza'),
+        ),
+        OutlinedButton.icon(
+          onPressed: () async {
+            final x = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 85);
+            onPick(x?.path);
+          },
+          icon: const Icon(Icons.upload),
+          label: const Text('Da galleria'),
+        ),
+        OutlinedButton.icon(
+          onPressed: () async {
+            final x = await _picker.pickImage(source: ImageSource.camera, imageQuality: 85);
+            onPick(x?.path);
+          },
+          icon: const Icon(Icons.photo_camera),
+          label: const Text('Scatta foto'),
+        ),
+      ]),
+    ]);
+  }
+
+  void _viewImage(String path) {
+    showDialog(
+      context: context,
+      builder: (_) => Dialog(
+        child: InteractiveViewer(child: Image.file(File(path))),
+      ),
+    );
+  }
 }
 
 // ===================== TAB: GARE =====================
@@ -608,8 +681,14 @@ class _GareTabState extends State<_GareTab> {
                     return Card(
                       child: ListTile(
                         title: Text('${g.opponent} • ${g.league}'),
-                        subtitle: Text('${df.format(g.dateTime)}\n${g.location}${g.notes == null || g.notes!.isEmpty ? '' : '\nNote: ${g.notes}'}'),
+                        subtitle: Text('${df.format(g.dateTime)}
+${g.location}${g.notes == null || g.notes!.isEmpty ? '' : '
+Note: ${g.notes}'}'),
                         isThreeLine: true,
+                        trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                          IconButton(icon: const Icon(Icons.edit), tooltip: 'Modifica', onPressed: () => _editGame(g)),
+                          IconButton(icon: const Icon(Icons.delete), tooltip: 'Elimina', onPressed: () => _deleteGame(g)),
+                        ]),
                       ),
                     );
                   },
@@ -624,6 +703,26 @@ class _GareTabState extends State<_GareTab> {
     if (g != null) setState(() => widget.store.addGame(widget.team, g));
   }
 
+  void _editGame(MatchGame g) async {
+    final updated = await Navigator.of(context).push<MatchGame?>(MaterialPageRoute(builder: (_) => GameEditPage(existing: g)));
+    if (updated != null) setState(() => widget.store.updateGame(widget.team));
+  }
+
+  void _deleteGame(MatchGame g) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Elimina gara'),
+        content: const Text('Confermi l\'eliminazione?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Annulla')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Elimina')),
+        ],
+      ),
+    );
+    if (ok == true) setState(() => widget.store.removeGame(widget.team, g));
+  }
+
   void _copyNext7Days() {
     final now = DateTime.now();
     final till = now.add(const Duration(days: 7));
@@ -632,7 +731,8 @@ class _GareTabState extends State<_GareTab> {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Nessuna partita nei prossimi 7 giorni')));
       return;
     }
-    final lines = games.map((g) => '- ${DateFormat('dd/MM HH:mm').format(g.dateTime)} ${g.league}: ${g.teamVs()} @ ${g.location}').join('\n');
+    final lines = games.map((g) => '- ${DateFormat('dd/MM HH:mm').format(g.dateTime)} ${g.league}: ${g.teamVs()} @ ${g.location}').join('
+');
     showDialog(context: context, builder: (_) => AlertDialog(title: const Text('Copia e incolla'), content: SingleChildScrollView(child: Text(lines)), actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Chiudi'))]));
   }
 
@@ -642,7 +742,8 @@ class _GareTabState extends State<_GareTab> {
 }
 
 class GameEditPage extends StatefulWidget {
-  const GameEditPage({super.key});
+  final MatchGame? existing;
+  const GameEditPage({super.key, this.existing});
   @override
   State<GameEditPage> createState() => _GameEditPageState();
 }
@@ -657,9 +758,23 @@ class _GameEditPageState extends State<GameEditPage> {
   final df = DateFormat('dd/MM/yyyy');
 
   @override
+  void initState() {
+    super.initState();
+    final g = widget.existing;
+    if (g != null) {
+      opponentC.text = g.opponent;
+      leagueC.text = g.league;
+      locationC.text = g.location;
+      notesC.text = g.notes ?? '';
+      date = DateTime(g.dateTime.year, g.dateTime.month, g.dateTime.day);
+      time = TimeOfDay(hour: g.dateTime.hour, minute: g.dateTime.minute);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Nuova gara')),
+      appBar: AppBar(title: Text(widget.existing == null ? 'Nuova gara' : 'Modifica gara')),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(12),
         child: Column(children: [
@@ -686,12 +801,12 @@ class _GameEditPageState extends State<GameEditPage> {
 
   Future<void> _pickDate() async {
     final now = DateTime.now();
-    final d = await showDatePicker(context: context, initialDate: now, firstDate: now.subtract(const Duration(days: 3650)), lastDate: now.add(const Duration(days: 3650)));
+    final d = await showDatePicker(context: context, initialDate: date ?? now, firstDate: now.subtract(const Duration(days: 3650)), lastDate: now.add(const Duration(days: 3650)));
     if (d != null) setState(() => date = d);
   }
 
   Future<void> _pickTime() async {
-    final t = await showTimePicker(context: context, initialTime: TimeOfDay.now());
+    final t = await showTimePicker(context: context, initialTime: time ?? TimeOfDay.now());
     if (t != null) setState(() => time = t);
   }
 
@@ -701,49 +816,99 @@ class _GameEditPageState extends State<GameEditPage> {
       return;
     }
     final dt = DateTime(date!.year, date!.month, date!.day, time!.hour, time!.minute);
-    final g = MatchGame(
-      id: UniqueKey().toString(),
-      dateTime: dt,
-      opponent: opponentC.text.trim(),
-      league: leagueC.text.trim(),
-      location: locationC.text.trim(),
-      notes: notesC.text.trim(),
-    );
-    Navigator.pop(context, g);
+    if (widget.existing != null) {
+      widget.existing!
+        ..dateTime = dt
+        ..opponent = opponentC.text.trim()
+        ..league = leagueC.text.trim()
+        ..location = locationC.text.trim()
+        ..notes = notesC.text.trim();
+      Navigator.pop(context, widget.existing);
+    } else {
+      final g = MatchGame(
+        id: UniqueKey().toString(),
+        dateTime: dt,
+        opponent: opponentC.text.trim(),
+        league: leagueC.text.trim(),
+        location: locationC.text.trim(),
+        notes: notesC.text.trim(),
+      );
+      Navigator.pop(context, g);
+    }
   }
 }
 
 // ===================== TAB: ALBUM =====================
-class _AlbumTab extends StatelessWidget {
+class _AlbumTab extends StatefulWidget {
   final Team team;
   final AppStore store;
   final VoidCallback onCreate;
   const _AlbumTab({required this.team, required this.store, required this.onCreate});
+  @override
+  State<_AlbumTab> createState() => _AlbumTabState();
+}
 
+class _AlbumTabState extends State<_AlbumTab> {
   @override
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.all(12.0),
       child: Column(children: [
         Row(children: [
-          ElevatedButton.icon(onPressed: onCreate, icon: const Icon(Icons.add), label: const Text('Crea album')),
+          ElevatedButton.icon(onPressed: widget.onCreate, icon: const Icon(Icons.add), label: const Text('Crea album')),
           const SizedBox(width: 8),
           OutlinedButton.icon(onPressed: () => _shareAlbum(context), icon: const Icon(Icons.link), label: const Text('Condividi link')),
         ]),
         const SizedBox(height: 12),
         Expanded(
-          child: team.albums.isEmpty
+          child: widget.team.albums.isEmpty
               ? const Center(child: Text('Nessun album'))
               : ListView.separated(
-                  itemCount: team.albums.length,
+                  itemCount: widget.team.albums.length,
                   separatorBuilder: (_, __) => const SizedBox(height: 10),
                   itemBuilder: (_, i) {
-                    final a = team.albums[i];
+                    final a = widget.team.albums[i];
                     return Card(
                       child: ListTile(
                         title: Text(a.name),
                         subtitle: Text('${a.imagePaths.length} immagini'),
-                        trailing: const Icon(Icons.chevron_right),
+                        trailing: PopupMenuButton<String>(
+                          onSelected: (v) async {
+                            if (v == 'rename') {
+                              final c = TextEditingController(text: a.name);
+                              final name = await showDialog<String?>(
+                                context: context,
+                                builder: (_) => AlertDialog(
+                                  title: const Text('Rinomina album'),
+                                  content: TextField(controller: c),
+                                  actions: [
+                                    TextButton(onPressed: () => Navigator.pop(context), child: const Text('Annulla')),
+                                    FilledButton(onPressed: () => Navigator.pop(context, c.text.trim()), child: const Text('Salva')),
+                                  ],
+                                ),
+                              );
+                              if (name != null && name.isNotEmpty) setState(() => widget.store.renameAlbum(a, name));
+                            }
+                            if (v == 'delete') {
+                              final ok = await showDialog<bool>(
+                                context: context,
+                                builder: (_) => AlertDialog(
+                                  title: const Text('Elimina album'),
+                                  content: const Text('Confermi l\'eliminazione?'),
+                                  actions: [
+                                    TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Annulla')),
+                                    FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Elimina')),
+                                  ],
+                                ),
+                              );
+                              if (ok == true) setState(() => widget.store.removeAlbum(widget.team, a));
+                            }
+                          },
+                          itemBuilder: (_) => const [
+                            PopupMenuItem(value: 'rename', child: Text('Rinomina')),
+                            PopupMenuItem(value: 'delete', child: Text('Elimina')),
+                          ],
+                        ),
                         onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => AlbumPage(album: a))),
                       ),
                     );
@@ -759,26 +924,60 @@ class _AlbumTab extends StatelessWidget {
   }
 }
 
-class AlbumPage extends StatelessWidget {
+class AlbumPage extends StatefulWidget {
   final Album album;
   const AlbumPage({super.key, required this.album});
   @override
+  State<AlbumPage> createState() => _AlbumPageState();
+}
+
+class _AlbumPageState extends State<AlbumPage> {
+  final ImagePicker _picker = ImagePicker();
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(album.name)),
-      body: Center(
-        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-          const Icon(Icons.photo_library, size: 72),
-          const SizedBox(height: 12),
-          Text('Galleria: ${album.imagePaths.length} immagini'),
-          const SizedBox(height: 12),
+      appBar: AppBar(title: Text(widget.album.name)),
+      body: Padding(
+        padding: const EdgeInsets.all(12.0),
+        child: Column(children: [
           Wrap(spacing: 10, children: [
-            ElevatedButton.icon(onPressed: () {}, icon: const Icon(Icons.upload), label: const Text('Carica immagine')),
-            ElevatedButton.icon(onPressed: () {}, icon: const Icon(Icons.photo_camera), label: const Text('Scatta foto')),
+            ElevatedButton.icon(onPressed: _pickFromGallery, icon: const Icon(Icons.upload), label: const Text('Carica immagine')),
+            ElevatedButton.icon(onPressed: _takePhoto, icon: const Icon(Icons.photo_camera), label: const Text('Scatta foto')),
           ]),
+          const SizedBox(height: 12),
+          Expanded(
+            child: widget.album.imagePaths.isEmpty
+                ? const Center(child: Text('Nessuna immagine'))
+                : GridView.builder(
+                    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, crossAxisSpacing: 6, mainAxisSpacing: 6),
+                    itemCount: widget.album.imagePaths.length,
+                    itemBuilder: (_, i) {
+                      final p = widget.album.imagePaths[i];
+                      return GestureDetector(
+                        onTap: () => _viewImage(p),
+                        child: Image.file(File(p), fit: BoxFit.cover),
+                      );
+                    },
+                  ),
+          ),
         ]),
       ),
     );
+  }
+
+  Future<void> _pickFromGallery() async {
+    final x = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 85);
+    if (x != null) setState(() => widget.album.imagePaths.add(x.path));
+  }
+
+  Future<void> _takePhoto() async {
+    final x = await _picker.pickImage(source: ImageSource.camera, imageQuality: 85);
+    if (x != null) setState(() => widget.album.imagePaths.add(x.path));
+  }
+
+  void _viewImage(String path) {
+    showDialog(context: context, builder: (_) => Dialog(child: InteractiveViewer(child: Image.file(File(path)))));
   }
 }
 
@@ -799,6 +998,9 @@ class AthleteEditPage extends StatefulWidget {
 class _AthleteEditPageState extends State<AthleteEditPage> {
   final firstC = TextEditingController();
   final lastC = TextEditingController();
+  final phoneC = TextEditingController();
+  final roleC = TextEditingController();
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -809,6 +1011,10 @@ class _AthleteEditPageState extends State<AthleteEditPage> {
           TextField(controller: firstC, decoration: const InputDecoration(labelText: 'Nome')),
           const SizedBox(height: 8),
           TextField(controller: lastC, decoration: const InputDecoration(labelText: 'Cognome')),
+          const SizedBox(height: 8),
+          TextField(controller: phoneC, decoration: const InputDecoration(labelText: 'Cellulare'), keyboardType: TextInputType.phone),
+          const SizedBox(height: 8),
+          TextField(controller: roleC, decoration: const InputDecoration(labelText: 'Ruolo')),
           const Spacer(),
         ]),
       ),
@@ -821,7 +1027,9 @@ class _AthleteEditPageState extends State<AthleteEditPage> {
                 ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Nome e Cognome sono obbligatori')));
                 return;
               }
-              final a = Athlete(id: UniqueKey().toString(), firstName: firstC.text.trim(), lastName: lastC.text.trim());
+              final a = Athlete(id: UniqueKey().toString(), firstName: firstC.text.trim(), lastName: lastC.text.trim())
+                ..phone = phoneC.text.trim().isEmpty ? null : phoneC.text.trim()
+                ..role = roleC.text.trim().isEmpty ? null : roleC.text.trim();
               Navigator.pop(context, a);
             },
             child: const Text('Crea'),
